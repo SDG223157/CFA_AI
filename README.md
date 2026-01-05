@@ -25,8 +25,9 @@ streamlit run app/main.py
 ### Deploy on Coolify (Dockerfile)
 - **Build Pack**: Dockerfile
 - **Dockerfile Location**: `/Dockerfile`
-- **Exposed Port**: `3000` (the container uses `PORT`, default `3000`)
+- **Exposed Port**: `8501` (recommended; Streamlit default)
 - **Environment Variables** (set in Coolify):
+  - `PORT=8501`
   - `OPENROUTER_API_KEY` (required for your model)
   - `OPENROUTER_MODEL=qwen/qwen2.5-vl-7b-instruct`
   - `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`

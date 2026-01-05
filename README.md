@@ -22,6 +22,18 @@ pip install -r requirements.txt
 streamlit run app/main.py
 ```
 
+### Deploy on Coolify (Dockerfile)
+- **Build Pack**: Dockerfile
+- **Dockerfile Location**: `/Dockerfile`
+- **Exposed Port**: `3000` (the container uses `PORT`, default `3000`)
+- **Environment Variables** (set in Coolify):
+  - `OPENROUTER_API_KEY` (required for your model)
+  - `OPENROUTER_MODEL=qwen/qwen2.5-vl-7b-instruct`
+  - `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`
+  - Optional: `CFA_AI_ROOT` (inside the container; typically leave default unless you mount data)
+- **Persistent Storage** (recommended):
+  - Mount a volume to `/app/.local` to persist `tasks.sqlite3` across deploys
+
 ### Configuration
 Set environment variables (optional):
 - **`CFA_AI_ROOT`**: folder to search (defaults to the repo folder)

@@ -6,6 +6,7 @@ A local app to capture daily tasks, search your files/data, and generate insight
 - **Task inbox**: add tasks quickly; mark done; persistence on disk
 - **File search**: search within a chosen root folder; preview file snippets
 - **Insights dashboard**: lightweight stats + optional AI summary over selected results
+- **Task Agent**: generate an AI plan + suggested file searches for each task (stored in SQLite)
 
 ### Setup
 Create and activate a virtualenv, then install dependencies:
@@ -40,6 +41,12 @@ streamlit run app/main.py
   - Optional: `CFA_AI_ROOT` (inside the container; typically leave default unless you mount data)
 - **Persistent Storage** (recommended):
   - Mount a volume to `/app/.local` to persist `tasks.sqlite3` across deploys
+
+### Using the Task Agent
+In the **Tasks** tab:
+- Click **“Generate AI plan”** on a task (or **“Generate AI plan for all open tasks”**).
+- The latest plan is stored and shown under **“AI for this task”**.
+- If the plan includes **suggested file searches**, click **“Copy to Search tab”** and then open the **Search** tab.
 
 ### Configuration
 Set environment variables (optional):

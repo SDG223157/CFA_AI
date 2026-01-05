@@ -7,6 +7,7 @@ import streamlit as st
 
 from app.ai.clients import build_default_client
 from app.ai.insights import InsightsInput, generate_insights
+from app.ai.task_agent import generate_task_plan
 from app.auth.google_oauth import (
     build_auth_url,
     exchange_code_for_token,
@@ -19,7 +20,15 @@ from app.auth.google_oauth import (
 )
 from app.config import load_config
 from app.core.file_search import file_stats, read_snippet, search_files
-from app.core.tasks import add_task, delete_tasks, init_db, list_tasks, set_task_completed
+from app.core.tasks import (
+    add_task,
+    add_task_ai,
+    delete_tasks,
+    init_db,
+    list_task_ai,
+    list_tasks,
+    set_task_completed,
+)
 
 
 def _as_path(p: str) -> Path:
@@ -106,10 +115,25 @@ def render_tasks(db_path: Path) -> None:
 
     with st.form("add_task_form", clear_on_submit=True):
         title = st.text_input("New task", placeholder="e.g. Review bank statement anomalies")
+        auto_plan = st.checkbox("Auto-generate AI plan on add", value=False)
         submitted = st.form_submit_button("Add")
         if submitted and title.strip():
-            add_task(db_path, title.strip())
+            t = add_task(db_path, title.strip())
             st.success("Task added.")
+            if auto_plan:
+                cfg = load_config()
+                client = build_default_client(
+                    openai_api_key=cfg.openai_api_key,
+                    openai_model=cfg.openai_model,
+                    openrouter_api_key=cfg.openrouter_api_key,
+                    openrouter_model=cfg.openrouter_model,
+                    openrouter_base_url=cfg.openrouter_base_url,
+                    ollama_base_url=cfg.ollama_base_url,
+                    ollama_model=cfg.ollama_model,
+                )
+                with st.spinner("Generating AI plan..."):
+                    res = generate_task_plan(client, task_title=t.title)
+                add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan", content=res.content)
 
     colA, colB = st.columns([1, 1])
     with colA:
@@ -125,6 +149,27 @@ def render_tasks(db_path: Path) -> None:
     if not tasks:
         st.caption("No tasks yet.")
         return
+
+    st.divider()
+    cfg = load_config()
+    client = build_default_client(
+        openai_api_key=cfg.openai_api_key,
+        openai_model=cfg.openai_model,
+        openrouter_api_key=cfg.openrouter_api_key,
+        openrouter_model=cfg.openrouter_model,
+        openrouter_base_url=cfg.openrouter_base_url,
+        ollama_base_url=cfg.ollama_base_url,
+        ollama_model=cfg.ollama_model,
+    )
+    st.caption(f"AI provider for task actions: {client.name()}")
+    if st.button("Generate AI plan for all open tasks"):
+        open_tasks = [t for t in tasks if t.completed_at is None]
+        with st.spinner(f"Generating plans for {len(open_tasks)} task(s)..."):
+            for t in open_tasks[:50]:
+                res = generate_task_plan(client, task_title=t.title)
+                add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan", content=res.content)
+        st.success("Done.")
+        st.rerun()
 
     for t in tasks:
         checked = t.completed_at is not None
@@ -142,11 +187,49 @@ def render_tasks(db_path: Path) -> None:
             set_task_completed(db_path, t.id, new_checked)
             st.rerun()
 
+        # AI section
+        with st.expander("AI for this task", expanded=False):
+            if st.button("Generate AI plan", key=f"ai_plan_{t.id}"):
+                with st.spinner("Generating plan..."):
+                    res = generate_task_plan(client, task_title=t.title)
+                add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan", content=res.content)
+                st.rerun()
+
+            plans = list_task_ai(db_path, t.id, kind="plan", limit=3)
+            if not plans:
+                st.caption("No AI plan yet.")
+            else:
+                latest = plans[0]
+                st.caption(f"Latest plan ({latest.provider}) @ {latest.created_at.isoformat(timespec='seconds')}")
+                st.code(latest.content)
+
+                # Optional: run suggested searches from the JSON
+                try:
+                    import json as _json
+
+                    parsed = _json.loads(latest.content)
+                    suggested = parsed.get("suggested_file_searches", [])
+                except Exception:
+                    suggested = []
+
+                if suggested:
+                    st.caption("Run a suggested file search (uses the Search tab root folder)")
+                    choices = [f"{s.get('query','')}" for s in suggested if isinstance(s, dict)]
+                    pick = st.selectbox("Suggested search", options=choices, key=f"suggest_pick_{t.id}")
+                    if st.button("Copy to Search tab", key=f"run_suggest_{t.id}"):
+                        st.session_state["search_query"] = pick
+                        st.session_state["force_search_run"] = True
+                        st.info("Copied. Click the Search tab to run it.")
+
 
 def render_search(root_dir: Path) -> None:
     st.subheader("Search Files")
 
-    query = st.text_input("Search query", placeholder="Try: invoice OR regex like \\bCFA\\b")
+    query = st.text_input(
+        "Search query",
+        key="search_query",
+        placeholder="Try: invoice OR regex like \\bCFA\\b",
+    )
     c1, c2, c3 = st.columns([0.25, 0.25, 0.5])
     with c1:
         regex = st.checkbox("Regex", value=False)
@@ -156,7 +239,8 @@ def render_search(root_dir: Path) -> None:
         max_hits = st.slider("Max hits", min_value=20, max_value=500, value=200, step=20)
 
     hits: list = []
-    if query.strip():
+    force_run = bool(st.session_state.pop("force_search_run", False))
+    if query.strip() and (force_run or "last_hits" not in st.session_state):
         with st.spinner("Searching..."):
             hits = search_files(
                 root_dir,

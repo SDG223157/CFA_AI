@@ -16,6 +16,16 @@ class Task:
     completed_at: datetime | None
 
 
+@dataclass(frozen=True)
+class TaskAI:
+    id: str
+    task_id: str
+    created_at: datetime
+    provider: str
+    kind: str  # e.g. "plan"
+    content: str  # JSON string (or fallback text)
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -30,6 +40,19 @@ def init_db(db_path: Path) -> None:
               title TEXT NOT NULL,
               created_at TEXT NOT NULL,
               completed_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_ai (
+              id TEXT PRIMARY KEY,
+              task_id TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              content TEXT NOT NULL,
+              FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
             )
             """
         )
@@ -106,5 +129,57 @@ def delete_tasks(db_path: Path, task_ids: Iterable[str]) -> int:
         )
         conn.commit()
         return int(cur.rowcount)
+
+
+def add_task_ai(db_path: Path, *, task_id: str, provider: str, kind: str, content: str) -> TaskAI:
+    rec = TaskAI(
+        id=str(uuid.uuid4()),
+        task_id=task_id,
+        created_at=_utc_now(),
+        provider=provider,
+        kind=kind,
+        content=content,
+    )
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            "INSERT INTO task_ai (id, task_id, created_at, provider, kind, content) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                rec.id,
+                rec.task_id,
+                rec.created_at.isoformat(),
+                rec.provider,
+                rec.kind,
+                rec.content,
+            ),
+        )
+        conn.commit()
+    return rec
+
+
+def list_task_ai(db_path: Path, task_id: str, *, kind: str | None = None, limit: int = 10) -> list[TaskAI]:
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        if kind:
+            rows = conn.execute(
+                "SELECT id, task_id, created_at, provider, kind, content FROM task_ai WHERE task_id = ? AND kind = ? ORDER BY created_at DESC LIMIT ?",
+                (task_id, kind, int(limit)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, task_id, created_at, provider, kind, content FROM task_ai WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
+                (task_id, int(limit)),
+            ).fetchall()
+
+    return [
+        TaskAI(
+            id=row["id"],
+            task_id=row["task_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            provider=row["provider"],
+            kind=row["kind"],
+            content=row["content"],
+        )
+        for row in rows
+    ]
 
 

@@ -20,6 +20,7 @@ from app.auth.google_oauth import (
 )
 from app.config import load_config
 from app.core.file_search import file_stats, read_snippet, search_files
+from app.core.settings import AppSettings, load_settings, save_settings
 from app.core.tasks import (
     add_task,
     add_task_ai,
@@ -349,6 +350,7 @@ def main() -> None:
 
     cfg = load_config()
     init_db(cfg.db_path)
+    settings = load_settings(cfg.data_dir)
 
     with st.sidebar:
         st.header("Settings")
@@ -363,22 +365,53 @@ def main() -> None:
                 st.session_state.pop("oauth_state", None)
                 st.query_params.clear()
                 st.rerun()
-        root_str = st.text_input("Root folder to search", value=str(cfg.root_dir))
+        default_root = settings.active_root_dir or str(cfg.root_dir)
+        root_str = st.text_input("Root folder to search", value=default_root)
         root_dir = _as_path(root_str)
         if not root_dir.exists() or not root_dir.is_dir():
             st.error("Root folder does not exist or is not a directory.")
+        else:
+            if root_str != settings.active_root_dir:
+                save_settings(cfg.data_dir, AppSettings(active_root_dir=root_str))
         st.caption("Tip: set `CFA_AI_ROOT` to persist this.")
 
     if not root_dir.exists() or not root_dir.is_dir():
         st.stop()
 
-    tabs = st.tabs(["Tasks", "Search", "Dashboard"])
+    tabs = st.tabs(["Tasks", "Search", "Dashboard", "Data Sources"])
     with tabs[0]:
         render_tasks(cfg.db_path)
     with tabs[1]:
         render_search(root_dir)
     with tabs[2]:
         render_dashboard(cfg.db_path, root_dir)
+    with tabs[3]:
+        st.subheader("Data Sources")
+        st.markdown(
+            "Use this to point the app at different folders (including mounted cloud drives). "
+            "The active search root is controlled by the sidebar **Root folder to search**."
+        )
+
+        st.divider()
+        st.subheader("Google Drive (recommended: mount into the container)")
+        st.markdown(
+            "For production, the simplest and most reliable way is to **mount Google Drive** into your Coolify app "
+            "(e.g. via `rclone mount`) and then set the sidebar root to that mount path.\n\n"
+            "Example paths you might use:\n"
+            "- `/mnt/gdrive` (if you mount there)\n"
+            "- `/data/gdrive` (if you mount there)\n\n"
+            "Then set `CFA_AI_ROOT` (or use the sidebar) to that path."
+        )
+
+        st.divider()
+        st.subheader("MCP (Model Context Protocol) connectors")
+        st.markdown(
+            "Yes, we can connect MCP servers (e.g. a Google Drive MCP server) so the app can browse/search without mounting.\n\n"
+            "To wire this correctly, I need one detail: **what MCP transport are you using?**\n"
+            "- `stdio` (local process) or\n"
+            "- `HTTP/SSE` (remote URL)\n\n"
+            "Reply with the MCP server you want to use (name/link) and the transport, and I’ll implement the connector."
+        )
 
 
 if __name__ == "__main__":

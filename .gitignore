@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# Local app data
+.local/
+*.sqlite3
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store
+

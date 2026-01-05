@@ -30,6 +30,11 @@ streamlit run app/main.py
   - `OPENROUTER_API_KEY` (required for your model)
   - `OPENROUTER_MODEL=qwen/qwen2.5-vl-7b-instruct`
   - `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`
+  - (Optional) Google Login:
+    - `APP_BASE_URL=https://your-domain` (must match the public domain)
+    - `GOOGLE_CLIENT_ID=...`
+    - `GOOGLE_CLIENT_SECRET=...`
+    - Google Console **Authorized redirect URI** must be: `APP_BASE_URL/` (note the trailing slash)
   - Optional: `CFA_AI_ROOT` (inside the container; typically leave default unless you mount data)
 - **Persistent Storage** (recommended):
   - Mount a volume to `/app/.local` to persist `tasks.sqlite3` across deploys

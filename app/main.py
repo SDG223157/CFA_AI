@@ -6,6 +6,14 @@ import streamlit as st
 
 from app.ai.clients import build_default_client
 from app.ai.insights import InsightsInput, generate_insights
+from app.auth.google_oauth import (
+    build_auth_url,
+    exchange_code_for_token,
+    fetch_userinfo,
+    is_allowed,
+    load_google_oauth_config,
+    new_state,
+)
 from app.config import load_config
 from app.core.file_search import file_stats, read_snippet, search_files
 from app.core.tasks import add_task, delete_tasks, init_db, list_tasks, set_task_completed
@@ -13,6 +21,71 @@ from app.core.tasks import add_task, delete_tasks, init_db, list_tasks, set_task
 
 def _as_path(p: str) -> Path:
     return Path(p).expanduser().resolve()
+
+
+def _qp_first(v):
+    if v is None:
+        return None
+    if isinstance(v, list):
+        return v[0] if v else None
+    return v
+
+
+def _require_login_if_configured() -> dict | None:
+    """
+    If Google OAuth is configured, require login and return the userinfo dict.
+    If not configured, return None and allow access (useful for local dev).
+    """
+    gcfg = load_google_oauth_config()
+    if gcfg is None:
+        return None
+
+    user = st.session_state.get("user")
+    if isinstance(user, dict) and user.get("email"):
+        return user
+
+    qp = st.query_params
+    code = _qp_first(qp.get("code"))
+    state = _qp_first(qp.get("state"))
+    err = _qp_first(qp.get("error"))
+    if err:
+        st.error(f"Google login error: {err}")
+
+    if code and state:
+        expected_state = st.session_state.get("oauth_state")
+        if not expected_state or state != expected_state:
+            st.error("Invalid OAuth state. Please try logging in again.")
+        else:
+            try:
+                token = exchange_code_for_token(gcfg, code=code)
+                access_token = token.get("access_token")
+                if not access_token:
+                    raise RuntimeError("Missing access_token from Google token response.")
+                info = fetch_userinfo(access_token=str(access_token))
+                email = str(info.get("email", "")).strip()
+                if not is_allowed(gcfg, email=email):
+                    st.error("Access denied: your Google account is not allowed.")
+                else:
+                    st.session_state["user"] = info
+                    st.query_params.clear()
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Login failed: {e}")
+
+    st.title("Daily Tasks + File Insights")
+    st.subheader("Login required")
+    st.caption("Sign in with Google to access the dashboard.")
+
+    if "oauth_state" not in st.session_state:
+        st.session_state["oauth_state"] = new_state()
+    login_url = build_auth_url(gcfg, state=st.session_state["oauth_state"])
+    st.link_button("Login with Google", login_url, type="primary")
+
+    st.info(
+        "Google Console setup: add this as an Authorized redirect URI:\n"
+        f"- {gcfg.redirect_uri}"
+    )
+    st.stop()
 
 
 def render_tasks(db_path: Path) -> None:
@@ -158,6 +231,7 @@ def render_dashboard(db_path: Path, root_dir: Path) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Daily Tasks + File Insights", layout="wide")
+    user = _require_login_if_configured()
     st.title("Daily Tasks + File Insights")
 
     cfg = load_config()
@@ -165,6 +239,17 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Settings")
+        if user:
+            email = str(user.get("email", "")).strip()
+            name = str(user.get("name", "") or user.get("given_name", "") or "").strip()
+            label = name if name else email
+            if label:
+                st.caption(f"Signed in as: {label}")
+            if st.button("Logout"):
+                st.session_state.pop("user", None)
+                st.session_state.pop("oauth_state", None)
+                st.query_params.clear()
+                st.rerun()
         root_str = st.text_input("Root folder to search", value=str(cfg.root_dir))
         root_dir = _as_path(root_str)
         if not root_dir.exists() or not root_dir.is_dir():

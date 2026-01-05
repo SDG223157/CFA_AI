@@ -126,6 +126,9 @@ def render_dashboard(db_path: Path, root_dir: Path) -> None:
     client = build_default_client(
         openai_api_key=cfg.openai_api_key,
         openai_model=cfg.openai_model,
+        openrouter_api_key=cfg.openrouter_api_key,
+        openrouter_model=cfg.openrouter_model,
+        openrouter_base_url=cfg.openrouter_base_url,
         ollama_base_url=cfg.ollama_base_url,
         ollama_model=cfg.ollama_model,
     )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import os
 from typing import Protocol
 
@@ -36,21 +35,30 @@ class NoopClient:
 
 
 class OpenAIClient:
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        *,
+        base_url: str = "https://api.openai.com/v1",
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         self._api_key = api_key
         self._model = model
+        self._base_url = base_url.rstrip("/")
+        self._extra_headers = extra_headers or {}
 
     def name(self) -> str:
         return f"openai:{self._model}"
 
     def chat(self, messages: list[ChatMessage]) -> str:
-        url = "https://api.openai.com/v1/chat/completions"
+        url = f"{self._base_url}/chat/completions"
         payload = {
             "model": self._model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": 0.2,
         }
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        headers = {"Authorization": f"Bearer {self._api_key}", **self._extra_headers}
 
         with httpx.Client(timeout=60) as client:
             resp = client.post(url, json=payload, headers=headers)
@@ -87,9 +95,29 @@ def build_default_client(
     *,
     openai_api_key: str | None,
     openai_model: str,
+    openrouter_api_key: str | None,
+    openrouter_model: str,
+    openrouter_base_url: str,
     ollama_base_url: str,
     ollama_model: str,
 ) -> LLMClient:
+    if openrouter_api_key:
+        # OpenRouter is OpenAI-compatible. Optional headers are recommended by OpenRouter.
+        # https://openrouter.ai/docs
+        extra = {}
+        referer = os.getenv("OPENROUTER_HTTP_REFERER", "").strip()
+        title = os.getenv("OPENROUTER_X_TITLE", "").strip()
+        if referer:
+            extra["HTTP-Referer"] = referer
+        if title:
+            extra["X-Title"] = title
+        return OpenAIClient(
+            api_key=openrouter_api_key,
+            model=openrouter_model,
+            base_url=openrouter_base_url,
+            extra_headers=extra,
+        )
+
     if openai_api_key:
         return OpenAIClient(api_key=openai_api_key, model=openai_model)
 

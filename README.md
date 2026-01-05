@@ -25,6 +25,9 @@ streamlit run app/main.py
 ### Configuration
 Set environment variables (optional):
 - **`CFA_AI_ROOT`**: folder to search (defaults to the repo folder)
+- **`OPENROUTER_API_KEY`**: enables OpenRouter (recommended for you)
+- **`OPENROUTER_MODEL`**: defaults to `qwen/qwen2.5-vl-7b-instruct`
+- **`OPENROUTER_BASE_URL`**: defaults to `https://openrouter.ai/api/v1`
 - **`OPENAI_API_KEY`**: enables OpenAI insights (optional)
 - **`OPENAI_MODEL`**: defaults to `gpt-4o-mini`
 - **`OLLAMA_BASE_URL`**: enables Ollama insights (optional, default `http://localhost:11434`)

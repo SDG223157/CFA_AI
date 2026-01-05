@@ -241,6 +241,15 @@ def render_tasks(db_path: Path) -> None:
             new_checked = st.checkbox(" ", value=checked, key=f"task_done_{t.id}")
         with cols[1]:
             st.write(t.title)
+            # Show AI status inline so it's obvious whether we have output or an error.
+            latest_plan = list_task_ai(db_path, t.id, kind="plan", limit=1)
+            latest_err = list_task_ai(db_path, t.id, kind="plan_error", limit=1)
+            if latest_plan:
+                st.caption("AI: ✅ plan available (open “AI for this task”)")
+            elif latest_err:
+                st.caption("AI: ⚠️ last run failed (open “AI for this task” to see why)")
+            else:
+                st.caption("AI: ⏳ not generated yet")
         with cols[2]:
             if st.button("🗑️", key=f"task_del_{t.id}"):
                 delete_tasks(db_path, [t.id])
@@ -251,7 +260,8 @@ def render_tasks(db_path: Path) -> None:
             st.rerun()
 
         # AI section
-        with st.expander("AI for this task", expanded=False):
+        plan_status = "✅" if latest_plan else ("⚠️" if latest_err else "⏳")
+        with st.expander(f"AI for this task {plan_status}", expanded=False):
             if st.button("Generate AI plan", key=f"ai_plan_{t.id}"):
                 try:
                     with st.spinner("Generating plan..."):
@@ -264,8 +274,14 @@ def render_tasks(db_path: Path) -> None:
                 st.rerun()
 
             plans = list_task_ai(db_path, t.id, kind="plan", limit=3)
+            errs = list_task_ai(db_path, t.id, kind="plan_error", limit=1)
             if not plans:
-                st.caption("No AI plan yet.")
+                if errs:
+                    e0 = errs[0]
+                    st.error("Last AI attempt failed:")
+                    st.code(e0.content)
+                else:
+                    st.caption("No AI plan yet. Click “Generate AI plan”.")
             else:
                 latest = plans[0]
                 st.caption(f"Latest plan ({latest.provider}) @ {latest.created_at.isoformat(timespec='seconds')}")

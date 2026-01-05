@@ -131,9 +131,14 @@ def render_tasks(db_path: Path) -> None:
                     ollama_base_url=cfg.ollama_base_url,
                     ollama_model=cfg.ollama_model,
                 )
-                with st.spinner("Generating AI plan..."):
-                    res = generate_task_plan(client, task_title=t.title)
-                add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan", content=res.content)
+                try:
+                    with st.spinner("Generating AI plan..."):
+                        res = generate_task_plan(client, task_title=t.title)
+                    add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan", content=res.content)
+                except Exception as e:
+                    msg = f"AI plan failed: {e}"
+                    st.error(msg)
+                    add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan_error", content=msg)
 
     colA, colB = st.columns([1, 1])
     with colA:
@@ -164,11 +169,17 @@ def render_tasks(db_path: Path) -> None:
     st.caption(f"AI provider for task actions: {client.name()}")
     if st.button("Generate AI plan for all open tasks"):
         open_tasks = [t for t in tasks if t.completed_at is None]
+        failures = 0
         with st.spinner(f"Generating plans for {len(open_tasks)} task(s)..."):
             for t in open_tasks[:50]:
-                res = generate_task_plan(client, task_title=t.title)
-                add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan", content=res.content)
-        st.success("Done.")
+                try:
+                    res = generate_task_plan(client, task_title=t.title)
+                    add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan", content=res.content)
+                except Exception as e:
+                    failures += 1
+                    msg = f"AI plan failed: {e}"
+                    add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan_error", content=msg)
+        st.success(f"Done. Failures: {failures}")
         st.rerun()
 
     for t in tasks:
@@ -190,9 +201,14 @@ def render_tasks(db_path: Path) -> None:
         # AI section
         with st.expander("AI for this task", expanded=False):
             if st.button("Generate AI plan", key=f"ai_plan_{t.id}"):
-                with st.spinner("Generating plan..."):
-                    res = generate_task_plan(client, task_title=t.title)
-                add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan", content=res.content)
+                try:
+                    with st.spinner("Generating plan..."):
+                        res = generate_task_plan(client, task_title=t.title)
+                    add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan", content=res.content)
+                except Exception as e:
+                    msg = f"AI plan failed: {e}"
+                    st.error(msg)
+                    add_task_ai(db_path, task_id=t.id, provider=client.name(), kind="plan_error", content=msg)
                 st.rerun()
 
             plans = list_task_ai(db_path, t.id, kind="plan", limit=3)

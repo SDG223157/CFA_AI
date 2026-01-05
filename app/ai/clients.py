@@ -62,7 +62,24 @@ class OpenAIClient:
 
         with httpx.Client(timeout=60) as client:
             resp = client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                # Include provider response body for debugging (model name, quota, auth, etc.).
+                detail = resp.text.strip()
+                try:
+                    j = resp.json()
+                    # OpenAI/OpenRouter often return {"error": {...}}
+                    if isinstance(j, dict) and "error" in j:
+                        detail = str(j["error"])
+                    else:
+                        detail = str(j)
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"LLM request failed ({resp.status_code}) at {url}: {detail[:2000]}"
+                ) from e
+
             data = resp.json()
         return data["choices"][0]["message"]["content"]
 

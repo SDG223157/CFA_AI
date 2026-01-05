@@ -6,6 +6,7 @@ import os
 import streamlit as st
 
 from app.ai.clients import build_default_client
+from app.ai.clients import ChatMessage
 from app.ai.insights import InsightsInput, generate_insights
 from app.ai.task_agent import generate_task_plan
 from app.auth.google_oauth import (
@@ -25,10 +26,20 @@ from app.core.tasks import (
     add_task,
     add_task_ai,
     delete_tasks,
+    delete_integration,
+    get_integration,
     init_db,
     list_task_ai,
     list_tasks,
     set_task_completed,
+    upsert_integration,
+)
+from app.integrations.google_drive import (
+    download_text,
+    list_files as drive_list_files,
+    pack_credentials,
+    refresh_access_token,
+    unpack_credentials,
 )
 
 
@@ -53,6 +64,10 @@ def _require_login_if_configured() -> dict | None:
     if gcfg is None:
         return None
 
+    # Ensure DB is initialized even during OAuth callback (needed for Drive connect).
+    cfg = load_config()
+    init_db(cfg.db_path)
+
     user = st.session_state.get("user")
     if isinstance(user, dict) and user.get("email"):
         return user
@@ -67,13 +82,16 @@ def _require_login_if_configured() -> dict | None:
     if code and state:
         # Verify state without relying on Streamlit session persistence (Coolify/proxies can break it).
         secret = (os.getenv("APP_AUTH_SECRET") or os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
-        ok = verify_state(state=state, secret=secret) if secret else False
-        if not ok:
-            # Fallback: legacy session-based state
-            expected_state = st.session_state.get("oauth_state")
-            ok = bool(expected_state and state == expected_state)
+        payload = verify_state(state=state, secret=secret) if secret else None
+        flow = (payload or {}).get("flow") if isinstance(payload, dict) else None
 
-        if not ok:
+        # Fallback: legacy session-based login state (no payload)
+        if payload is None:
+            expected_state = st.session_state.get("oauth_state")
+            if expected_state and state == expected_state:
+                flow = "login"
+
+        if not flow:
             st.error("Invalid OAuth state. Please try logging in again.")
         else:
             try:
@@ -81,16 +99,45 @@ def _require_login_if_configured() -> dict | None:
                 access_token = token.get("access_token")
                 if not access_token:
                     raise RuntimeError("Missing access_token from Google token response.")
+
                 info = fetch_userinfo(access_token=str(access_token))
-                email = str(info.get("email", "")).strip()
-                if not is_allowed(gcfg, email=email):
-                    st.error("Access denied: your Google account is not allowed.")
-                else:
-                    st.session_state["user"] = info
+                email = str(info.get("email", "")).strip().lower()
+
+                if flow == "login":
+                    if not is_allowed(gcfg, email=email):
+                        st.error("Access denied: your Google account is not allowed.")
+                    else:
+                        st.session_state["user"] = info
+                        st.query_params.clear()
+                        st.rerun()
+
+                elif flow == "drive":
+                    # Store refresh token for Drive access (Claude-like "connected account").
+                    expected_email = str((payload or {}).get("email") or "").strip().lower()
+                    if expected_email and expected_email != email:
+                        raise RuntimeError("Drive connect email mismatch. Please retry.")
+
+                    refresh_token = token.get("refresh_token")
+                    if not refresh_token:
+                        raise RuntimeError(
+                            "Google did not return a refresh_token. "
+                            "In Google consent screen, ensure offline access and prompt=consent; "
+                            "or revoke the app in https://myaccount.google.com/permissions then retry."
+                        )
+                    upsert_integration(
+                        cfg.db_path,
+                        user_email=email,
+                        provider="google_drive",
+                        data=pack_credentials(refresh_token=str(refresh_token)),
+                    )
+                    st.success("Google Drive connected.")
                     st.query_params.clear()
                     st.rerun()
+
+                else:
+                    st.error(f"Unknown OAuth flow: {flow}")
             except Exception as e:
-                st.error(f"Login failed: {e}")
+                st.error(f"OAuth callback failed: {e}")
 
     st.title("Daily Tasks + File Insights")
     st.subheader("Login required")
@@ -100,8 +147,12 @@ def _require_login_if_configured() -> dict | None:
         st.session_state["oauth_state"] = new_state()
     # Prefer stateless signed state token so redirects work even if session changes.
     secret = (os.getenv("APP_AUTH_SECRET") or os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
-    state_out = sign_state(secret=secret) if secret else st.session_state["oauth_state"]
-    login_url = build_auth_url(gcfg, state=state_out)
+    state_out = (
+        sign_state(secret=secret, payload={"flow": "login"}) if secret else st.session_state["oauth_state"]
+    )
+    login_url = build_auth_url(
+        gcfg, state=state_out, scope="openid email profile", access_type="online", prompt="select_account"
+    )
     st.link_button("Login with Google", login_url, type="primary")
 
     st.info(
@@ -393,7 +444,143 @@ def main() -> None:
         )
 
         st.divider()
-        st.subheader("Google Drive (recommended: mount into the container)")
+        st.subheader("Google Drive (Claude-style connect)")
+
+        gcfg = load_google_oauth_config()
+        if not user or not isinstance(user, dict) or not user.get("email"):
+            st.info("Sign in first, then you can connect Google Drive.")
+        elif gcfg is None:
+            st.error("Google OAuth is not configured (missing GOOGLE_CLIENT_ID/SECRET or APP_BASE_URL).")
+        else:
+            email = str(user.get("email", "")).strip().lower()
+            secret = (os.getenv("APP_AUTH_SECRET") or os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
+            if not secret:
+                st.error("Set APP_AUTH_SECRET (recommended) to secure OAuth state.")
+
+            data = get_integration(cfg.db_path, user_email=email, provider="google_drive")
+            connected = bool(data)
+
+            c1, c2 = st.columns([0.7, 0.3])
+            with c1:
+                st.caption(f"Account: {email}")
+                st.caption(f"Status: {'Connected' if connected else 'Not connected'}")
+            with c2:
+                if connected:
+                    if st.button("Disconnect Google Drive"):
+                        delete_integration(cfg.db_path, user_email=email, provider="google_drive")
+                        st.success("Disconnected.")
+                        st.rerun()
+                else:
+                    drive_state = (
+                        sign_state(secret=secret, payload={"flow": "drive", "email": email}) if secret else new_state()
+                    )
+                    scope = "openid email profile https://www.googleapis.com/auth/drive.readonly"
+                    drive_url = build_auth_url(
+                        gcfg,
+                        state=drive_state,
+                        scope=scope,
+                        access_type="offline",
+                        prompt="consent select_account",
+                    )
+                    st.link_button("Connect Google Drive", drive_url, type="primary")
+
+            if connected:
+                creds = unpack_credentials(data or "")
+                refresh_token = str(creds.get("refresh_token", "")).strip()
+                if not refresh_token:
+                    st.error("Stored Drive credentials are missing refresh_token. Please disconnect and reconnect.")
+                else:
+                    st.divider()
+                    st.subheader("Browse / Search Drive")
+                    st.caption(
+                        "Tip: search uses Google Drive query syntax. Example: "
+                        "`name contains 'invoice' and trashed = false`"
+                    )
+                    q = st.text_input(
+                        "Drive query",
+                        value="trashed = false",
+                        help="Drive query syntax: https://developers.google.com/drive/api/guides/search-files",
+                    )
+                    page_size = st.slider("Results", 5, 50, 15, 5)
+                    if st.button("Search Drive"):
+                        try:
+                            tok = refresh_access_token(
+                                client_id=gcfg.client_id,
+                                client_secret=gcfg.client_secret,
+                                refresh_token=refresh_token,
+                            )
+                            access_token = str(tok.get("access_token", "")).strip()
+                            if not access_token:
+                                raise RuntimeError("Missing access_token from refresh.")
+                            res = drive_list_files(access_token=access_token, query=q, page_size=page_size)
+                            st.session_state["drive_last"] = res
+                            st.session_state["drive_access_token"] = access_token
+                        except Exception as e:
+                            st.error(f"Drive search failed: {e}")
+
+                    res = st.session_state.get("drive_last")
+                    access_token = st.session_state.get("drive_access_token")
+                    files = (res or {}).get("files", []) if isinstance(res, dict) else []
+                    if files:
+                        options = []
+                        by_id = {}
+                        for f in files:
+                            if not isinstance(f, dict):
+                                continue
+                            fid = str(f.get("id", ""))
+                            name = str(f.get("name", ""))
+                            mt = str(f.get("mimeType", ""))
+                            label = f"{name} ({mt})"
+                            options.append(label)
+                            by_id[label] = f
+
+                        pick = st.selectbox("Select a file", options=options)
+                        meta = by_id.get(pick, {})
+                        st.json(meta)
+
+                        if st.button("Analyze selected file with AI"):
+                            if not access_token:
+                                st.error("No access token. Click 'Search Drive' first.")
+                            else:
+                                try:
+                                    text = download_text(
+                                        access_token=str(access_token),
+                                        file_id=str(meta.get("id")),
+                                        mime_type=str(meta.get("mimeType")),
+                                    )
+                                    text = text[:50_000]
+                                    llm = build_default_client(
+                                        openai_api_key=cfg.openai_api_key,
+                                        openai_model=cfg.openai_model,
+                                        openrouter_api_key=cfg.openrouter_api_key,
+                                        openrouter_model=cfg.openrouter_model,
+                                        openrouter_base_url=cfg.openrouter_base_url,
+                                        ollama_base_url=cfg.ollama_base_url,
+                                        ollama_model=cfg.ollama_model,
+                                    )
+                                    prompt = (
+                                        "You are analyzing a file from Google Drive for the user.\n"
+                                        "Summarize key points, extract actionable items, and highlight any numbers/dates.\n"
+                                        "If the text looks truncated, mention what to fetch next.\n\n"
+                                        f"File name: {meta.get('name')}\n"
+                                        f"MIME: {meta.get('mimeType')}\n\n"
+                                        "CONTENT (may be truncated):\n"
+                                        f"{text}"
+                                    )
+                                    out = llm.chat(
+                                        [
+                                            ChatMessage(role="system", content="Return concise bullet points."),
+                                            ChatMessage(role="user", content=prompt),
+                                        ]
+                                    )
+                                    st.text_area("AI analysis", value=str(out), height=320)
+                                except Exception as e:
+                                    st.error(f"AI analysis failed: {e}")
+                    else:
+                        st.caption("No Drive results yet.")
+
+        st.divider()
+        st.subheader("Google Drive (alternative: mount into the container)")
         st.markdown(
             "For production, the simplest and most reliable way is to **mount Google Drive** into your Coolify app "
             "(e.g. via `rclone mount`) and then set the sidebar root to that mount path.\n\n"

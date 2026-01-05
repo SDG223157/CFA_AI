@@ -42,6 +42,16 @@ streamlit run app/main.py
 - **Persistent Storage** (recommended):
   - Mount a volume to `/app/.local` to persist `tasks.sqlite3` across deploys
 
+### Connect Google Drive (Claude-style)
+In the **Data Sources** tab, you can **Connect Google Drive**. This will prompt you for the additional scope:
+- `https://www.googleapis.com/auth/drive.readonly`
+
+After connecting, you can search Drive, select a file, and click **Analyze selected file with AI**.
+
+Notes:
+- The app stores a **Drive refresh token** in SQLite (`/app/.local/tasks.sqlite3`). Keep that volume private.
+- If Google doesn’t return a `refresh_token`, revoke access at `https://myaccount.google.com/permissions` and reconnect.
+
 ### Using the Task Agent
 In the **Tasks** tab:
 - Click **“Generate AI plan”** on a task (or **“Generate AI plan for all open tasks”**).

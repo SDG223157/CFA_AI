@@ -75,43 +75,60 @@ def _b64url_decode(raw: str) -> bytes:
     return base64.urlsafe_b64decode(raw + pad)
 
 
-def sign_state(*, secret: str, ttl_seconds: int = 15 * 60) -> str:
+def sign_state(*, secret: str, ttl_seconds: int = 15 * 60, payload: dict[str, Any] | None = None) -> str:
     """
     Build a stateless OAuth state token that can be verified without Streamlit session state.
     Helps in deployments where the Streamlit session may change during redirects.
     """
-    payload = {
+    p: dict[str, Any] = {
         "n": secrets.token_urlsafe(16),
         "exp": int(time.time()) + int(ttl_seconds),
     }
-    payload_b = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    if payload:
+        for k, v in payload.items():
+            # Prevent overriding internal keys
+            if k in {"n", "exp"}:
+                continue
+            p[k] = v
+    payload_b = json.dumps(p, separators=(",", ":"), sort_keys=True).encode("utf-8")
     payload_s = _b64url_encode(payload_b)
     sig = hmac.new(secret.encode("utf-8"), payload_s.encode("utf-8"), hashlib.sha256).digest()
     return payload_s + "." + _b64url_encode(sig)
 
 
-def verify_state(*, state: str, secret: str) -> bool:
+def verify_state(*, state: str, secret: str) -> dict[str, Any] | None:
     try:
         payload_s, sig_s = state.split(".", 1)
         expected = hmac.new(secret.encode("utf-8"), payload_s.encode("utf-8"), hashlib.sha256).digest()
         if not hmac.compare_digest(_b64url_encode(expected), sig_s):
-            return False
+            return None
         payload = json.loads(_b64url_decode(payload_s).decode("utf-8"))
         exp = int(payload.get("exp", 0))
-        return time.time() <= exp
+        if time.time() > exp:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
     except Exception:
-        return False
+        return None
 
 
-def build_auth_url(cfg: GoogleOAuthConfig, *, state: str) -> str:
+def build_auth_url(
+    cfg: GoogleOAuthConfig,
+    *,
+    state: str,
+    scope: str = "openid email profile",
+    access_type: str = "online",
+    prompt: str = "select_account",
+) -> str:
     params = {
         "client_id": cfg.client_id,
         "redirect_uri": cfg.redirect_uri,
         "response_type": "code",
-        "scope": "openid email profile",
+        "scope": scope,
         "state": state,
-        "access_type": "online",
-        "prompt": "select_account",
+        "access_type": access_type,
+        "prompt": prompt,
     }
     return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
 

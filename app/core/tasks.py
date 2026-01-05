@@ -56,6 +56,18 @@ def init_db(db_path: Path) -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS integrations (
+              id TEXT PRIMARY KEY,
+              user_email TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              data TEXT NOT NULL,
+              UNIQUE(user_email, provider)
+            )
+            """
+        )
         conn.commit()
 
 
@@ -181,5 +193,44 @@ def list_task_ai(db_path: Path, task_id: str, *, kind: str | None = None, limit:
         )
         for row in rows
     ]
+
+
+def upsert_integration(db_path: Path, *, user_email: str, provider: str, data: str) -> None:
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO integrations (id, user_email, provider, created_at, data)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_email, provider) DO UPDATE SET
+              data = excluded.data
+            """,
+            (
+                str(uuid.uuid4()),
+                user_email.strip().lower(),
+                provider,
+                _utc_now().isoformat(),
+                data,
+            ),
+        )
+        conn.commit()
+
+
+def get_integration(db_path: Path, *, user_email: str, provider: str) -> str | None:
+    with sqlite3.connect(str(db_path)) as conn:
+        row = conn.execute(
+            "SELECT data FROM integrations WHERE user_email = ? AND provider = ?",
+            (user_email.strip().lower(), provider),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def delete_integration(db_path: Path, *, user_email: str, provider: str) -> int:
+    with sqlite3.connect(str(db_path)) as conn:
+        cur = conn.execute(
+            "DELETE FROM integrations WHERE user_email = ? AND provider = ?",
+            (user_email.strip().lower(), provider),
+        )
+        conn.commit()
+        return int(cur.rowcount)
 
 

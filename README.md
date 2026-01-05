@@ -35,6 +35,7 @@ streamlit run app/main.py
     - `APP_BASE_URL=https://your-domain` (must match the public domain)
     - `GOOGLE_CLIENT_ID=...`
     - `GOOGLE_CLIENT_SECRET=...`
+    - `APP_AUTH_SECRET=...` (recommended; stabilizes OAuth state across redirects/restarts)
     - Google Console **Authorized redirect URI** must be: `APP_BASE_URL/` (note the trailing slash)
   - Optional: `CFA_AI_ROOT` (inside the container; typically leave default unless you mount data)
 - **Persistent Storage** (recommended):

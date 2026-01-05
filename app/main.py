@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import os
 import streamlit as st
 
 from app.ai.clients import build_default_client
@@ -13,6 +14,8 @@ from app.auth.google_oauth import (
     is_allowed,
     load_google_oauth_config,
     new_state,
+    sign_state,
+    verify_state,
 )
 from app.config import load_config
 from app.core.file_search import file_stats, read_snippet, search_files
@@ -52,8 +55,15 @@ def _require_login_if_configured() -> dict | None:
         st.error(f"Google login error: {err}")
 
     if code and state:
-        expected_state = st.session_state.get("oauth_state")
-        if not expected_state or state != expected_state:
+        # Verify state without relying on Streamlit session persistence (Coolify/proxies can break it).
+        secret = (os.getenv("APP_AUTH_SECRET") or os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
+        ok = verify_state(state=state, secret=secret) if secret else False
+        if not ok:
+            # Fallback: legacy session-based state
+            expected_state = st.session_state.get("oauth_state")
+            ok = bool(expected_state and state == expected_state)
+
+        if not ok:
             st.error("Invalid OAuth state. Please try logging in again.")
         else:
             try:
@@ -78,7 +88,10 @@ def _require_login_if_configured() -> dict | None:
 
     if "oauth_state" not in st.session_state:
         st.session_state["oauth_state"] = new_state()
-    login_url = build_auth_url(gcfg, state=st.session_state["oauth_state"])
+    # Prefer stateless signed state token so redirects work even if session changes.
+    secret = (os.getenv("APP_AUTH_SECRET") or os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
+    state_out = sign_state(secret=secret) if secret else st.session_state["oauth_state"]
+    login_url = build_auth_url(gcfg, state=state_out)
     st.link_button("Login with Google", login_url, type="primary")
 
     st.info(

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import hmac
+import hashlib
+import json
+import time
 import secrets
 from typing import Any
 from urllib.parse import urlencode
@@ -57,6 +61,46 @@ def load_google_oauth_config() -> GoogleOAuthConfig | None:
 
 def new_state() -> str:
     return secrets.token_urlsafe(32)
+
+def _b64url_encode(raw: bytes) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(raw: str) -> bytes:
+    import base64
+
+    pad = "=" * (-len(raw) % 4)
+    return base64.urlsafe_b64decode(raw + pad)
+
+
+def sign_state(*, secret: str, ttl_seconds: int = 15 * 60) -> str:
+    """
+    Build a stateless OAuth state token that can be verified without Streamlit session state.
+    Helps in deployments where the Streamlit session may change during redirects.
+    """
+    payload = {
+        "n": secrets.token_urlsafe(16),
+        "exp": int(time.time()) + int(ttl_seconds),
+    }
+    payload_b = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_s = _b64url_encode(payload_b)
+    sig = hmac.new(secret.encode("utf-8"), payload_s.encode("utf-8"), hashlib.sha256).digest()
+    return payload_s + "." + _b64url_encode(sig)
+
+
+def verify_state(*, state: str, secret: str) -> bool:
+    try:
+        payload_s, sig_s = state.split(".", 1)
+        expected = hmac.new(secret.encode("utf-8"), payload_s.encode("utf-8"), hashlib.sha256).digest()
+        if not hmac.compare_digest(_b64url_encode(expected), sig_s):
+            return False
+        payload = json.loads(_b64url_decode(payload_s).decode("utf-8"))
+        exp = int(payload.get("exp", 0))
+        return time.time() <= exp
+    except Exception:
+        return False
 
 
 def build_auth_url(cfg: GoogleOAuthConfig, *, state: str) -> str:
